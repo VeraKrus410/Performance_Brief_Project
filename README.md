@@ -1,4 +1,20 @@
-# Project starter
+# Performance Brief
+
+Paste a three-month shop table into the single-screen app to get a concise,
+three-sentence reading of the biggest change and what to watch next.
+
+The app loads the system prompt from `prompts/reading_v1.md`. Each request is
+also appended to `data/traces.jsonl` with the pasted table, raw model output,
+prompt version, and latency in seconds.
+
+## Run the app
+
+Install the dependencies, then start the interface from the repository root:
+
+```bash
+pip install -r requirements.txt
+streamlit run src/app.py
+```
 
 ## Add your API key locally
 
