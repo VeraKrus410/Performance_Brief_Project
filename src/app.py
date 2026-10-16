@@ -53,34 +53,41 @@ def log_run(table: str, output: str, latency_seconds: float) -> None:
 
 def get_brief(table: str) -> dict[str, object]:
     """Ask the model for a brief and validate the JSON envelope we display."""
-    started_at = time.perf_counter()
-    raw_response = ""
-    try:
-        raw_response = ask(table, system=load_system_prompt())
+    system_prompt = load_system_prompt()
+    for attempt in range(2):
+        started_at = time.perf_counter()
+        raw_response = ""
         try:
-            result = json.loads(raw_response)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("The model returned an invalid response. Please try again.") from exc
+            raw_response = ask(table, system=system_prompt)
+            try:
+                result = json.loads(raw_response)
+            except (json.JSONDecodeError, TypeError) as exc:
+                if attempt == 0:
+                    continue
+                preview = str(raw_response)[:200]
+                raise RuntimeError(
+                    f"The model returned an invalid response: {preview}"
+                ) from exc
 
-        if not isinstance(result, dict):
-            raise RuntimeError("The model returned an unexpected response. Please try again.")
+            if not isinstance(result, dict):
+                raise RuntimeError("The model returned an unexpected response. Please try again.")
 
-        status = result.get("status")
-        if status not in {"ok", "unknown"}:
-            raise RuntimeError("The model returned an unexpected status. Please try again.")
+            status = result.get("status")
+            if status not in {"ok", "unknown"}:
+                raise RuntimeError("The model returned an unexpected status. Please try again.")
 
-        sentences = result.get("sentences")
-        if status == "ok" and (
-            not isinstance(sentences, list)
-            or len(sentences) != 3
-            or not all(isinstance(sentence, str) for sentence in sentences)
-        ):
-            raise RuntimeError("The model returned an incomplete brief. Please try again.")
-        if status == "unknown" and sentences != []:
-            raise RuntimeError("The model returned an unexpected response. Please try again.")
-        return result
-    finally:
-        log_run(table, raw_response, time.perf_counter() - started_at)
+            sentences = result.get("sentences")
+            if status == "ok" and (
+                not isinstance(sentences, list)
+                or len(sentences) != 3
+                or not all(isinstance(sentence, str) for sentence in sentences)
+            ):
+                raise RuntimeError("The model returned an incomplete brief. Please try again.")
+            if status == "unknown" and sentences != []:
+                raise RuntimeError("The model returned an unexpected response. Please try again.")
+            return result
+        finally:
+            log_run(table, raw_response, time.perf_counter() - started_at)
 
 
 def render_brief(result: dict[str, object]) -> None:
