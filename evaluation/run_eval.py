@@ -14,11 +14,11 @@ from typing import Any
 from openai import OpenAIError
 
 try:
-    from src.app import get_brief
+    from src.app import PROMPT_VERSION, get_brief
     from src.llm import ask
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from src.app import get_brief
+    from src.app import PROMPT_VERSION, get_brief
     from src.llm import ask
 
 
@@ -26,8 +26,9 @@ EVALUATION_ROOT = Path(__file__).resolve().parent
 GOLDEN_PATH = EVALUATION_ROOT / "golden.csv"
 LEGACY_GOLDEN_PATH = EVALUATION_ROOT / "goldenset.csv"
 OUTPUT_PATH = EVALUATION_ROOT / "outputs.csv"
+VERSIONED_OUTPUT_PATH = EVALUATION_ROOT / f"outputs_{PROMPT_VERSION}.csv"
 JUDGE_PROMPT_PATH = EVALUATION_ROOT / "judge_prompt.md"
-NUMBER_PATTERN = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])")
+NUMBER_PATTERN = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w]|\.\d)")
 CHECKS = (
     "valid_json",
     "exactly_3_sentences",
@@ -217,6 +218,7 @@ def write_outputs(rows: list[dict[str, Any]]) -> None:
             output_file,
             fieldnames=[
                 "id",
+                "prompt_version",
                 "status",
                 "sentences",
                 "numbers_used",
@@ -226,6 +228,26 @@ def write_outputs(rows: list[dict[str, Any]]) -> None:
                 "verdict",
                 "reason",
             ],
+            lineterminator="\n",
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+    with VERSIONED_OUTPUT_PATH.open("w", newline="", encoding="utf-8") as output_file:
+        writer = csv.DictWriter(
+            output_file,
+            fieldnames=[
+                "id",
+                "prompt_version",
+                "status",
+                "sentences",
+                "numbers_used",
+                "note",
+                "latency_seconds",
+                "evidence",
+                "verdict",
+                "reason",
+            ],
+            lineterminator="\n",
         )
         writer.writeheader()
         writer.writerows(rows)
@@ -262,6 +284,7 @@ def main() -> None:
         output_rows.append(
             {
                 "id": case.case_id,
+                "prompt_version": PROMPT_VERSION,
                 "status": result.get("status", ""),
                 "sentences": json.dumps(result.get("sentences", []), ensure_ascii=False),
                 "numbers_used": json.dumps(result.get("numbers_used", []), ensure_ascii=False),
@@ -279,7 +302,10 @@ def main() -> None:
         "\nJudge verdicts: "
         + ", ".join(f"{verdict} {verdict_counts[verdict]}" for verdict in verdict_counts)
     )
-    print(f"\nSaved {len(output_rows)} outputs to {OUTPUT_PATH}")
+    print(
+        f"\nSaved {len(output_rows)} outputs to {OUTPUT_PATH} "
+        f"and {VERSIONED_OUTPUT_PATH}"
+    )
 
 
 if __name__ == "__main__":

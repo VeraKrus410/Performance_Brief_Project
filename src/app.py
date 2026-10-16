@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import time
 from pathlib import Path
 
@@ -16,9 +18,11 @@ except ImportError:
 
 
 APP_ROOT = Path(__file__).resolve().parent.parent
-PROMPT_PATH = APP_ROOT / "prompts" / "reading_v1.md"
 TRACE_PATH = APP_ROOT / "data" / "traces.jsonl"
-PROMPT_VERSION = "reading_v1"
+PROMPT_VERSION = os.environ.get("PROMPT_VERSION", "v1")
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", PROMPT_VERSION):
+    raise RuntimeError("PROMPT_VERSION must contain only letters, numbers, '.', '_' or '-'.")
+PROMPT_PATH = APP_ROOT / "prompts" / f"reading_{PROMPT_VERSION}.md"
 DEFAULT_TABLE = """Indicator | July | August | September
 Sales (EUR) | 12400 | 11100 | 13800
 Customers | 310 | 240 | 265

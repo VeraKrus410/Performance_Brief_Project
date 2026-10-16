@@ -3,9 +3,16 @@
 Paste a three-month shop table into the single-screen app to get a concise,
 three-sentence reading of the biggest change and what to watch next.
 
-The app loads the system prompt from `prompts/reading_v1.md`. Each request is
-also appended to `data/traces.jsonl` with the pasted table, raw model output,
-prompt version, and latency in seconds.
+The app loads the system prompt from `prompts/reading_<version>.md`, where
+`version` comes from the optional `PROMPT_VERSION` environment variable and
+defaults to `v1`. For example, `PROMPT_VERSION=v2` loads
+`prompts/reading_v2.md`. Each request is also appended to
+`data/traces.jsonl` with the pasted table, raw model output, prompt version,
+and latency in seconds.
+
+The evaluator writes results to both `evaluation/outputs.csv` and the
+version-specific `evaluation/outputs_<version>.csv`; each row includes the
+prompt version.
 
 ## Run the app
 
@@ -30,6 +37,12 @@ You will receive your group's API key by e-mail. They go in a local `.env` file,
 
    ```
    LLM_API_KEY=...
+   ```
+
+   Optionally select a prompt version:
+
+   ```
+   PROMPT_VERSION=v2
    ```
 
    The proxy URL and model name are already built in; you do not need to set them.
