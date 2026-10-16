@@ -4,7 +4,7 @@ Small business owners paste their monthly numbers and get a three-sentence brief
 
 ## Stack
 
-- Python, single screen. Run with `python src/app.py`.
+Python, single screen. Web interface with Streamlit, run with streamlit run src/app.py. Never use tkinter or any desktop GUI; the app runs in Codespaces.
 - Evaluation: `python evaluation/run_eval.py`.
 
 ## Where things go
