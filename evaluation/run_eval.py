@@ -127,10 +127,16 @@ def load_judge_prompt() -> str:
 
 def judge_output(table: str, sentences: list[str]) -> dict[str, str]:
     """Ask the judge to assess direction claims in an otherwise valid output."""
-    user_message = f"Table:\n{table}\n\nThree sentences:\n" + "\n".join(sentences)
+    user_message = (
+        f"TABLE:\n{table}\n\nSENTENCES:\n"
+        + "\n".join(f"{index}. {sentence}" for index, sentence in enumerate(sentences, 1))
+    )
     try:
         raw_verdict = ask(user_message, system=load_judge_prompt())
-        verdict = json.loads(raw_verdict)
+        cleaned_verdict = re.sub(r"```(?:json)?", "", raw_verdict, flags=re.IGNORECASE).strip()
+        start = cleaned_verdict.find("{")
+        end = cleaned_verdict.rfind("}")
+        verdict = json.loads(cleaned_verdict[start : end + 1])
     except (OpenAIError, RuntimeError, json.JSONDecodeError, TypeError) as exc:
         return {
             "evidence": "",
@@ -264,6 +270,61 @@ def print_summary(results: list[tuple[str, dict[str, bool]]]) -> None:
         print(f"| {check} | {passed}/{total} ({rate:.1f}%) | {', '.join(failed) or '-'} |")
 
 
+def print_judge_comparison(output_rows: list[dict[str, Any]]) -> None:
+    labels_path = EVALUATION_ROOT / "labels.csv"
+    with labels_path.open(newline="", encoding="utf-8") as labels_file:
+        labels = {
+            (row["id"].strip(), row["prompt_version"].strip()): row
+            for row in csv.DictReader(labels_file)
+            if row["human_verdict"].strip().lower() != "n/a"
+        }
+
+    comparisons = [
+        (row, labels.get((row["id"], row["prompt_version"])))
+        for row in output_rows
+    ]
+    comparisons = [
+        (row, label)
+        for row, label in comparisons
+        if label is not None
+    ]
+
+    def print_metrics(title: str, rows: list[tuple[dict[str, Any], dict[str, str]]]) -> None:
+        counts = {"TP": 0, "FN": 0, "TN": 0, "FP": 0}
+        for output, label in rows:
+            judge_passed = output["verdict"] == "PASS"
+            human_passed = label["human_verdict"].strip() == "PASS"
+            if judge_passed and human_passed:
+                counts["TP"] += 1
+            elif not judge_passed and human_passed:
+                counts["FN"] += 1
+            elif not judge_passed and not human_passed:
+                counts["TN"] += 1
+            else:
+                counts["FP"] += 1
+        tpr = counts["TP"] / (counts["TP"] + counts["FN"]) if counts["TP"] + counts["FN"] else 0
+        tnr = counts["TN"] / (counts["TN"] + counts["FP"]) if counts["TN"] + counts["FP"] else 0
+        print(
+            f"\n{title}: TP {counts['TP']}, FN {counts['FN']}, TN {counts['TN']}, "
+            f"FP {counts['FP']}, TPR {tpr:.3f}, TNR {tnr:.3f}"
+        )
+
+    print_metrics("Judge vs human (all labelled)", comparisons)
+    held_out = [
+        (output, label)
+        for output, label in comparisons
+        if not label["used_for_prompt"].strip()
+    ]
+    print_metrics("Judge vs human (held-out)", held_out)
+
+    disagreements = [
+        output["id"]
+        for output, label in comparisons
+        if (output["verdict"] == "PASS") != (label["human_verdict"].strip() == "PASS")
+    ]
+    print(f"Judge/human disagreements: {', '.join(disagreements) or '-'}")
+
+
 def main() -> None:
     cases = load_cases()
     summary: list[tuple[str, dict[str, bool]]] = []
@@ -302,6 +363,7 @@ def main() -> None:
         "\nJudge verdicts: "
         + ", ".join(f"{verdict} {verdict_counts[verdict]}" for verdict in verdict_counts)
     )
+    print_judge_comparison(output_rows)
     print(
         f"\nSaved {len(output_rows)} outputs to {OUTPUT_PATH} "
         f"and {VERSIONED_OUTPUT_PATH}"
