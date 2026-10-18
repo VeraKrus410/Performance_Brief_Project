@@ -5,8 +5,8 @@ three-sentence reading of the biggest change and what to watch next.
 
 The app loads the system prompt from `prompts/reading_<version>.md`, where
 `version` comes from the optional `PROMPT_VERSION` environment variable and
-defaults to `v1`. For example, `PROMPT_VERSION=v2` loads
-`prompts/reading_v2.md`. Each request is also appended to
+defaults to `v2`. For example, `PROMPT_VERSION=v1` loads
+`prompts/reading_v1.md`. Each request is also appended to
 `data/traces.jsonl` with the pasted table, raw model output, prompt version,
 and latency in seconds.
 
