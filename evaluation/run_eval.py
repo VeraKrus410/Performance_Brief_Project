@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import re
 import sys
 import time
@@ -132,7 +133,7 @@ def judge_output(table: str, sentences: list[str]) -> dict[str, str]:
         + "\n".join(f"{index}. {sentence}" for index, sentence in enumerate(sentences, 1))
     )
     try:
-        raw_verdict = ask(user_message, system=load_judge_prompt())
+        raw_verdict = ask(user_message, system=load_judge_prompt(), temperature=0)
         cleaned_verdict = re.sub(r"```(?:json)?", "", raw_verdict, flags=re.IGNORECASE).strip()
         start = cleaned_verdict.find("{")
         end = cleaned_verdict.rfind("}")
@@ -169,16 +170,8 @@ def judge_output(table: str, sentences: list[str]) -> dict[str, str]:
     return {"evidence": evidence, "verdict": judge_verdict, "reason": reason}
 
 
-def evaluate_case(case: Case) -> tuple[dict[str, Any], dict[str, bool], float]:
-    started_at = time.perf_counter()
-    try:
-        result = get_brief(case.table)
-        valid_json = True
-    except (RuntimeError, OpenAIError) as exc:
-        result = _empty_result(str(exc))
-        valid_json = False
-    latency_seconds = time.perf_counter() - started_at
-
+def evaluate_result(case: Case, result: dict[str, Any]) -> dict[str, bool]:
+    valid_json = result.get("status") != "error"
     sentences = result.get("sentences")
     numbers_used = result.get("numbers_used")
     sentences_are_strings = isinstance(sentences, list) and all(
@@ -196,10 +189,9 @@ def evaluate_case(case: Case) -> tuple[dict[str, Any], dict[str, bool], float]:
         ("hard: single month", "hard: missing indicator")
     )
 
-    def contains_number(number: str, text: str) -> bool:
-        return bool(re.search(rf"(?<![\w.]){re.escape(number)}(?![\w.])", text))
+    sentence_numbers = set(_sentence_numbers(sentence_list))
 
-    checks = {
+    return {
         "valid_json": valid_json,
         "exactly_3_sentences": (
             expected_unknown or (sentences_are_strings and len(sentence_list) == 3)
@@ -207,7 +199,7 @@ def evaluate_case(case: Case) -> tuple[dict[str, Any], dict[str, bool], float]:
         "numbers_in_table": numbers_are_valid
         and all(number in table_numbers for number in number_list),
         "numbers_in_sentences": numbers_are_valid
-        and all(contains_number(number, sentence_text) for number in number_list),
+        and all(number in sentence_numbers for number in number_list),
         "no_percent_sign": "%" not in sentence_text,
         "sentences_at_most_30_words": all(
             _word_count(sentence) <= 30 for sentence in sentence_list
@@ -215,48 +207,75 @@ def evaluate_case(case: Case) -> tuple[dict[str, Any], dict[str, bool], float]:
         "hard_cases_unknown": not expected_unknown
         or result.get("status") == "unknown",
     }
-    return result, checks, latency_seconds
+
+
+def evaluate_case(case: Case) -> tuple[dict[str, Any], dict[str, bool], float]:
+    started_at = time.perf_counter()
+    try:
+        result = get_brief(case.table)
+    except (RuntimeError, OpenAIError) as exc:
+        result = _empty_result(str(exc))
+    latency_seconds = time.perf_counter() - started_at
+    return result, evaluate_result(case, result), latency_seconds
+
+
+def write_output_file(path: Path, rows: list[dict[str, Any]]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as output_file:
+        writer = csv.DictWriter(
+            output_file,
+            fieldnames=[
+                "id",
+                "prompt_version",
+                "status",
+                "sentences",
+                "numbers_used",
+                "note",
+                "latency_seconds",
+                "evidence",
+                "verdict",
+                "reason",
+            ],
+            lineterminator="\n",
+        )
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def write_outputs(rows: list[dict[str, Any]]) -> None:
-    with OUTPUT_PATH.open("w", newline="", encoding="utf-8") as output_file:
-        writer = csv.DictWriter(
-            output_file,
-            fieldnames=[
-                "id",
-                "prompt_version",
-                "status",
-                "sentences",
-                "numbers_used",
-                "note",
-                "latency_seconds",
-                "evidence",
-                "verdict",
-                "reason",
-            ],
-            lineterminator="\n",
+    write_output_file(OUTPUT_PATH, rows)
+    write_output_file(VERSIONED_OUTPUT_PATH, rows)
+
+
+def load_saved_outputs(cases: list[Case]) -> list[dict[str, Any]]:
+    if not VERSIONED_OUTPUT_PATH.exists():
+        raise FileNotFoundError(
+            f"Judge-only output file not found: {VERSIONED_OUTPUT_PATH}"
         )
-        writer.writeheader()
-        writer.writerows(rows)
-    with VERSIONED_OUTPUT_PATH.open("w", newline="", encoding="utf-8") as output_file:
-        writer = csv.DictWriter(
-            output_file,
-            fieldnames=[
-                "id",
-                "prompt_version",
-                "status",
-                "sentences",
-                "numbers_used",
-                "note",
-                "latency_seconds",
-                "evidence",
-                "verdict",
-                "reason",
-            ],
-            lineterminator="\n",
+
+    with VERSIONED_OUTPUT_PATH.open(newline="", encoding="utf-8") as output_file:
+        rows = list(csv.DictReader(output_file))
+
+    rows_by_id = {row.get("id", "").strip(): row for row in rows}
+    missing_ids = [case.case_id for case in cases if case.case_id not in rows_by_id]
+    if missing_ids:
+        raise ValueError(
+            f"{VERSIONED_OUTPUT_PATH} is missing output rows: {', '.join(missing_ids)}"
         )
-        writer.writeheader()
-        writer.writerows(rows)
+    return [rows_by_id[case.case_id] for case in cases]
+
+
+def parse_saved_result(row: dict[str, Any]) -> dict[str, Any]:
+    try:
+        sentences = json.loads(row.get("sentences", "[]"))
+        numbers_used = json.loads(row.get("numbers_used", "[]"))
+    except json.JSONDecodeError as exc:
+        return _empty_result(f"Invalid saved output JSON: {exc}")
+    return {
+        "status": row.get("status", ""),
+        "sentences": sentences,
+        "numbers_used": numbers_used,
+        "note": row.get("note", ""),
+    }
 
 
 def print_summary(results: list[tuple[str, dict[str, bool]]]) -> None:
@@ -326,26 +345,51 @@ def print_judge_comparison(output_rows: list[dict[str, Any]]) -> None:
 
 
 def main() -> None:
+    print(load_judge_prompt().splitlines()[0])
     cases = load_cases()
     summary: list[tuple[str, dict[str, bool]]] = []
     output_rows: list[dict[str, Any]] = []
     verdict_counts = {"PASS": 0, "FAIL": 0, "UNKNOWN": 0}
+    judge_only = os.environ.get("JUDGE_ONLY") == "1"
 
-    for case in cases:
-        result, checks, latency_seconds = evaluate_case(case)
+    if judge_only:
+        saved_rows = load_saved_outputs(cases)
+        evaluated_rows = []
+        for case, row in zip(cases, saved_rows):
+            result = parse_saved_result(row)
+            evaluated_rows.append(
+                (
+                    case,
+                    result,
+                    evaluate_result(case, result),
+                    float(row.get("latency_seconds", "0") or 0),
+                    row,
+                )
+            )
+    else:
+        evaluated_rows = [
+            (case, *evaluate_case(case), None)
+            for case in cases
+        ]
+
+    for case, result, checks, latency_seconds, saved_row in evaluated_rows:
         summary.append((case.case_id, checks))
         sentences = result.get("sentences", [])
-        if result.get("status") == "ok" and isinstance(sentences, list) and all(
-            isinstance(sentence, str) for sentence in sentences
-        ):
-            judge = judge_output(case.table, sentences)
+        if result.get("status") == "ok":
+            judge_sentences = (
+                sentences
+                if isinstance(sentences, list)
+                and all(isinstance(sentence, str) for sentence in sentences)
+                else []
+            )
+            judge = judge_output(case.table, judge_sentences)
         else:
             judge = {"evidence": "", "verdict": "UNKNOWN", "reason": ""}
         verdict_counts[judge["verdict"]] += 1
         output_rows.append(
             {
                 "id": case.case_id,
-                "prompt_version": PROMPT_VERSION,
+                "prompt_version": (saved_row or {}).get("prompt_version", PROMPT_VERSION),
                 "status": result.get("status", ""),
                 "sentences": json.dumps(result.get("sentences", []), ensure_ascii=False),
                 "numbers_used": json.dumps(result.get("numbers_used", []), ensure_ascii=False),
@@ -357,7 +401,10 @@ def main() -> None:
             }
         )
 
-    write_outputs(output_rows)
+    if judge_only:
+        write_output_file(VERSIONED_OUTPUT_PATH, output_rows)
+    else:
+        write_outputs(output_rows)
     print_summary(summary)
     print(
         "\nJudge verdicts: "
